@@ -232,6 +232,7 @@ impl PromPlanner {
         prom_expr: &PromExpr,
         logical_scan_id: &mut Option<u32>,
         logical_ids_differ: &mut bool,
+        any_partitioned: &mut bool,
     ) -> Result<Option<PreparedInput>> {
         let (Some(metric), Some(time)) = (
             self.ctx.table_name.clone(),
@@ -362,12 +363,7 @@ impl PromPlanner {
         {
             return Ok(None);
         }
-        // A multi-scan plan has no placement over a table split into several regions: the
-        // dist analyzer refuses a multi-child node there, so such a query keeps the
-        // existing plan instead of failing.
-        if selector_count > 1 && table_meta.partition_column_names().next().is_some() {
-            return Ok(None);
-        }
+        *any_partitioned |= table_meta.partition_column_names().next().is_some();
         // The region's columnar series-index samples, one of the readers this scan may be
         // served by, store `Float64` fields only, and the logical plan cannot tell which
         // reader arrives. So every field has to be `Float64`: an integer, a `Float32`, a
@@ -506,6 +502,7 @@ impl PromPlanner {
             // carried a different id. See the `cross_table` use below.
             let mut logical_scan_id: Option<u32> = None;
             let mut logical_ids_differ = false;
+            let mut any_partitioned = false;
             for selector in &selectors {
                 self.ctx = original_context.clone();
                 // These matchers are alternatives the one scan below the node cannot represent, so the
@@ -619,6 +616,7 @@ impl PromPlanner {
                                 prom_expr,
                                 &mut logical_scan_id,
                                 &mut logical_ids_differ,
+                                &mut any_partitioned,
                             )
                             .await?
                         else {
@@ -715,6 +713,7 @@ impl PromPlanner {
                         prom_expr,
                         &mut logical_scan_id,
                         &mut logical_ids_differ,
+                        &mut any_partitioned,
                     )
                     .await?
                 else {
@@ -722,11 +721,18 @@ impl PromPlanner {
                 };
                 prepared.push(one);
             }
-            Ok(Some((prepared, single_input_context, logical_ids_differ)))
+            Ok(Some((
+                prepared,
+                single_input_context,
+                logical_ids_differ,
+                any_partitioned,
+            )))
         }
         .await;
         self.ctx = original_context;
-        let Some((mut prepared, single_input_context, logical_ids_differ)) = preparation? else {
+        let Some((mut prepared, single_input_context, logical_ids_differ, any_partitioned)) =
+            preparation?
+        else {
             return Ok(None);
         };
         // Selectors over one table share one region, so the node runs there over every scan. When
@@ -736,6 +742,11 @@ impl PromPlanner {
         // that differ only by that id still read different series and are bound as two inputs.
         let cross_table =
             !same_table_scans(prepared.iter().map(|(scan, ..)| scan)) || logical_ids_differ;
+        // Only cross-table selectors are converted into independent raw sources below.
+        // A same-table multi-scan cannot be placed in one of several regions safely.
+        if selectors.len() > 1 && !cross_table && any_partitioned {
+            return Ok(None);
+        }
         // The first input names the output's time index and, on one table, binds every scan.
         let Some((_, _, metric, time, tags, _)) = prepared.first() else {
             return Ok(None);
