@@ -1090,8 +1090,12 @@ impl PromPlanner {
                 None
             };
             if let Some((partial, final_tree)) = split {
-                // The partial stage may introduce labels before aggregation. The final
-                // tree consumes state, so derive output columns from the complete tree.
+                // The statement's output columns come from the whole tree, not from its Final half:
+                // the Final half starts at the aggregate state input, whose labels are the state's
+                // grouping, so a label the prefix created - `dst` in
+                // `sum without (host) (label_replace(...))` - is on the merged series but is not
+                // among that input's tags. The canonicalized tree still holds the prefix rewrite
+                // and is the authority for the labels the statement publishes.
                 let Some(output_schema) = Self::fused_root_schema(&tree, &source_tags, &time)
                 else {
                     return Ok(None);

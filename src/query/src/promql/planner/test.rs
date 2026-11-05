@@ -4118,6 +4118,14 @@ async fn native_fused_aggregate_splits_into_a_final_over_a_partial_producer() {
             "stdvar(some_metric)" => &["field_0", "timestamp"],
             "sum by (tag_0) (rate(some_metric[5m]))" => &["field_0", "tag_0", "timestamp"],
             "sum without (tag_0) (some_metric)" => &["field_0", "timestamp"],
+            // The output columns are the whole tree's, not the Final half's state input's: `dst` is
+            // created by the prefix rewrite, so a grouping that keeps or names it publishes it.
+            "sum without (tag_0) (label_replace(some_metric, \"dst\", \"$1\", \"tag_0\", \"(.*)\"))" => {
+                &["dst", "field_0", "timestamp"]
+            }
+            "sum by (dst) (label_replace(some_metric, \"dst\", \"$1\", \"tag_0\", \"(.*)\"))" => {
+                &["dst", "field_0", "timestamp"]
+            }
             "sum(rate(some_metric[5m]))" => &["field_0", "timestamp"],
             "ceil(sum(some_metric))" => &["field_0", "timestamp"],
             "sum(avg(some_metric) by (tag_0))" => &["field_0", "timestamp"],
