@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["drain","mark_schedulable","scheduling_status"],"struct":["DatanodeRequest","DatanodeSchedulingResponse","DrainDatanodeRequest","DrainDatanodeResponse"]};
