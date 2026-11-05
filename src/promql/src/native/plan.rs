@@ -837,18 +837,21 @@ pub struct NativeNode {
 ///
 /// The rewrite is judged by the labels it writes and the ones its input carries, which is why the
 /// caller supplies what it knows about each source's tags, indexed by the `source_index` the leaves
-/// were bound to: a destination that names no label of the input writes a fresh one, and a fresh
-/// label cannot make two series equal. That is the difference between `label_replace(x, "dst", "$1",
-/// "host", "(.*)")` - which no merge has to collect - and `label_replace(x, "host", "same", "host",
-/// ".*")`, which folds every series of `x` into one label set.
+/// were bound to: a destination that names no ordinary label of the input writes a fresh one, and a
+/// fresh ordinary label cannot make two series equal. That is the difference between
+/// `label_replace(x, "dst", "$1", "host", "(.*)")` - which no merge has to collect - and
+/// `label_replace(x, "host", "same", "host", ".*")`, which folds every series of `x` into one label
+/// set.
 ///
 /// A source's entry is its complete runtime label set, so `__name__` is one of its labels whenever
 /// its series carry a name - a scan bound to one metric names every series from its binding. That is
 /// what makes `label_replace(x, "__name__", "same", "__name__", ".*")` a rewrite of an existing
 /// label: two metrics whose ordinary labels are equal can be told apart by name alone, and rewriting
-/// that name folds them into one identity. A name the input does not carry - after `abs`, a
-/// `timestamp` or a range function dropped it - is a fresh label, and writing it there cannot make
-/// two series equal.
+/// that name folds them into one identity. A name write is collected even when the derived set no
+/// longer carries `__name__` - after `abs`, a `timestamp` or a range function dropped it - because
+/// the scan below those kernels can still hold several metrics whose ordinary labels are equal, and
+/// writing one name puts them under one identity; the walk has no proof that the input reads a
+/// single metric, so the conservative answer is the one that collects.
 ///
 /// Everything else either keeps the set it read or answers a set of its own:
 ///
@@ -929,9 +932,14 @@ pub fn duplicates_canonical_labels(node: &NativeNode, source_tags: &[Vec<String>
 
 /// Whether `op`, applied to `input`'s series, writes a label those series already carry.
 ///
-/// The walk is over the ops in written order, starting from the labels the input reports - the
-/// complete runtime set, so `__name__` is one of them whenever the input's series carry a name. A
+/// The walk is over the ops in written order, starting from the labels the input reports. A
 /// destination the input already carries can fold two series into one; a fresh destination cannot.
+/// A `__name__` destination is always treated as carried, even when the derived set has lost it: a
+/// kernel such as `abs`, `timestamp` or a range function drops the name, but the scan below it can
+/// still hold several metrics whose ordinary labels are equal, and writing one name puts those
+/// identities under one label set. Nothing here proves the input reads a single metric, so the
+/// conservative answer is the one that collects.
+///
 /// `None` when the input's label set is not derivable, which is treated as "it may carry the
 /// destination" by the caller: an unknown set proves nothing, so the conservative answer is the one
 /// that collects.
@@ -945,7 +953,7 @@ fn map_writes_existing_label(
     for operation in op.ops.iter() {
         if let MapOp::Label(rewrite) = operation {
             let destination = rewrite.destination();
-            if tags.iter().any(|tag| tag == destination) {
+            if destination == METRIC_NAME || tags.iter().any(|tag| tag == destination) {
                 existing = true;
             }
             // A label the input did not carry is one the rewrite publishes only when it can write a

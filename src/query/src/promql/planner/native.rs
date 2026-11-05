@@ -3206,28 +3206,43 @@ mod tests {
         }
     }
 
-    /// A rewrite of a name the input no longer carries writes a fresh label, so no merge collects
-    /// it: `abs` has already dropped the name, and two series of one metric stay distinct by their
-    /// tags.
+    /// A name write is collected even above a kernel that dropped the name: the scan below it can
+    /// still hold several metrics whose ordinary labels are equal, so writing one name can fold them
+    /// into one identity. The output still publishes the written name.
     #[test]
-    fn a_name_rewrite_above_a_dropped_name_is_not_collected() {
+    fn a_name_rewrite_above_a_dropped_name_is_collected() {
         let runtime = [vec![
             "host".to_string(),
             "kind".to_string(),
             METRIC_NAME.to_string(),
         ]];
         let tree =
-            compiled_test_tree(r#"label_replace(abs(x), "__name__", "same", "__name__", "(.*)")"#);
+            compiled_test_tree(r#"label_replace(abs(x), "__name__", "same", "missing", "(.*)")"#);
         let collected = promql::native::canonicalize::merge_label_rewrites(&tree, &runtime)
             .expect("the pass produces a legal tree");
         assert!(
-            !collected.to_string().contains("Merge"),
-            "the name was dropped before the rewrite: {collected}"
+            matches!(collected.root().expr, NativeExpr::Merge { .. }),
+            "the merge sits above the name rewrite: {collected}"
         );
-        // The rewrite still writes a name, so the output publishes one.
+        assert_eq!(
+            1,
+            collected.to_string().matches("Merge").count(),
+            "exactly one merge: {collected}"
+        );
+        // The rewrite writes a name over a dropped one, so the output publishes a name column.
         assert_eq!(
             Some(vec!["host".into(), "kind".into(), METRIC_NAME.into()]),
             native_output_tags(collected.root(), &[vec!["host".into(), "kind".into()]])
+        );
+
+        // A fresh ordinary destination above the same kernel is still uncollected: no scan can carry
+        // an ordinary label it does not declare.
+        let fresh = compiled_test_tree(r#"label_replace(abs(x), "dst", "$1", "host", "(.*)")"#);
+        let collected = promql::native::canonicalize::merge_label_rewrites(&fresh, &runtime)
+            .expect("the pass produces a legal tree");
+        assert!(
+            !collected.to_string().contains("Merge"),
+            "a fresh ordinary destination does not alias: {collected}"
         );
     }
 

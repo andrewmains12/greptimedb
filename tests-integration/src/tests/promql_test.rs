@@ -3050,6 +3050,58 @@ async fn native_promql_rewrites_the_metric_name() {
     );
     expect_canonical_boundary("two metrics renamed to one name");
 
+    // A name written above `abs` is collected even though `abs` dropped the name: the two metrics are
+    // still told apart by name alone below it, so writing one name folds their samples into one
+    // identity. Without the collection each metric would answer as its own series under one label set.
+    observer.clear();
+    let rewritten_above_abs = run_discovery(
+        r#"label_replace(abs({__name__=~"name_left|name_right", host=~"h|i"}), "__name__", "same", "", ".*")"#,
+        "(0, 600, '10m')",
+    )
+    .await
+    .unwrap();
+    let (_, rows) = native_labelled_rows(rewritten_above_abs).await;
+    assert_eq!(
+        rows,
+        vec![
+            (0, labels(&[("__name__", "same"), ("host", "h")]), 1.0),
+            (
+                600_000,
+                labels(&[("__name__", "same"), ("host", "h")]),
+                10.0
+            ),
+            (0, labels(&[("__name__", "same"), ("host", "i")]), 2.0),
+            (
+                600_000,
+                labels(&[("__name__", "same"), ("host", "i")]),
+                20.0
+            ),
+        ],
+        "one identity carries both metrics' points after `abs` dropped their names"
+    );
+    expect_canonical_boundary("a name rewrite above a dropped name");
+
+    // The same shape at one point is that identity's duplicate-label-set error, and it is reported
+    // even though the two series came from different metrics and a math kernel erased their names.
+    observer.clear();
+    let renamed_above_abs_clash = run_discovery(
+        r#"label_replace(abs({__name__=~"name_left|name_clash", host="h"}), "__name__", "same", "", ".*")"#,
+        "(0, 0, '1s')",
+    )
+    .await;
+    let error = match renamed_above_abs_clash {
+        Ok(output) => collect_error(output).await,
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("cannot contain metrics with the same labelset"),
+        "a name written above `abs` reports the duplicate label set: {error}"
+    );
+    assert!(
+        observer.fused().is_some(),
+        "the collision after a dropped name is reported by a native plan"
+    );
+
     // A point where the other metric already holds a sample is the duplicate-label-set error, and it
     // is reported even though the two series came from different metrics.
     observer.clear();

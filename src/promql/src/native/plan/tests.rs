@@ -1748,10 +1748,12 @@ fn a_rewrite_of_the_metric_name_aliases_a_named_source() {
     ));
 }
 
-/// A name the input no longer carries is a fresh label: `abs`, a `timestamp` and a range function
-/// drop it, so writing `__name__` above one of them cannot make two series equal.
+/// A name write is collected even above a kernel that dropped the name: the scan below `abs`, a
+/// `timestamp` or a range function can still hold several metrics whose ordinary labels are equal,
+/// so writing one name puts those identities under one label set. A fresh ordinary destination is
+/// still uncollected, because no scan can carry an ordinary label it does not declare.
 #[test]
-fn a_rewrite_of_a_dropped_name_writes_a_fresh_label() {
+fn a_name_rewrite_above_a_dropped_name_is_collected() {
     let out = grid(0, 60_000, 4);
     let named = vec![vec!["host".to_string(), "__name__".to_string()]];
     let selected = || input_on(Arc::clone(&out));
@@ -1771,8 +1773,15 @@ fn a_rewrite_of_a_dropped_name_writes_a_fresh_label() {
         ),
     ] {
         assert!(
-            !duplicates_canonical_labels(&rewritten(dropped, "__name__", "__name__"), &named),
-            "{name}"
+            duplicates_canonical_labels(
+                &replaced(dropped.clone(), "__name__", "same", "missing"),
+                &named
+            ),
+            "{name}: a name write may alias metrics the kernel left indistinguishable"
+        );
+        assert!(
+            !duplicates_canonical_labels(&rewritten(dropped, "dst", "host"), &named),
+            "{name}: a fresh ordinary destination cannot alias"
         );
     }
 }
