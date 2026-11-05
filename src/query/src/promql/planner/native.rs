@@ -54,13 +54,8 @@ use datatypes::series::SeriesOrdering;
 use datatypes::series::samples::{FieldSpec, SeriesSchema};
 use datatypes::series::time::EvalGrid;
 use promql::extension_plan::{
-<<<<<<< HEAD
-    FusedOutputFormat, FusedSeries, FusedSeriesBinding, InputLocality, RawSeriesSource,
-    input_locality, matching_operands_drop_key, tree_source_fields,
-=======
-    AggregateFinalize, FusedOutputFormat, FusedSeries, FusedSeriesBinding, FusedSeriesExec,
-    InputLocality, RawSeriesSource, input_locality, matching_operands_drop_key, tree_source_fields,
->>>>>>> b924bb8b2ba (feat(query): execute native raw promql over real datanodes)
+    FusedOutputFormat, FusedSeries, FusedSeriesBinding, FusedSeriesExec, InputLocality,
+    RawSeriesSource, input_locality, matching_operands_drop_key, tree_source_fields,
 };
 use promql::native::execute::NativeExecutionState;
 use promql::native::plan::{
@@ -83,6 +78,7 @@ use crate::promql::native_compile::{
     InfoInput, compile_selectors, compile_statement, info_input, statement_grid,
 };
 use crate::promql::planner::{DEFAULT_FIELD_COLUMN, DEFAULT_TIME_INDEX_COLUMN, PromPlanner};
+use crate::query_engine::QueryEngineState;
 
 /// The query-context key that turns the native fused-series route on for one query.
 ///
@@ -229,10 +225,7 @@ impl PromPlanner {
     pub(super) async fn try_plan_native_operand(
         &mut self,
         expr: &PromExpr,
-<<<<<<< HEAD
-=======
         query_engine_state: &QueryEngineState,
->>>>>>> b924bb8b2ba (feat(query): execute native raw promql over real datanodes)
     ) -> Result<Option<(LogicalPlan, super::PromPlannerContext)>> {
         let saved = self.ctx.clone();
         let (plan, operand_ctx) = match self
@@ -475,10 +468,7 @@ impl PromPlanner {
     pub(super) async fn try_plan_native_fused(
         &mut self,
         prom_expr: &PromExpr,
-<<<<<<< HEAD
-=======
         query_engine_state: &QueryEngineState,
->>>>>>> b924bb8b2ba (feat(query): execute native raw promql over real datanodes)
     ) -> Result<Option<LogicalPlan>> {
         Ok(self
             .try_plan_native_fused_with_context(prom_expr, query_engine_state)
@@ -1157,35 +1147,18 @@ impl PromPlanner {
             // A tree whose fold can be split keeps that plan: it exports aggregate state rather
             // than whole samples, so it moves less between the two halves than a sample boundary
             // would. The general segmentation below is the fallback for the trees it declines,
-<<<<<<< HEAD
             // which are the ones its per-series prefix cannot express. The split is decided before
             // anything consumes a child, so a tree it declines keeps the plan it would have built
-            // without this route.
-            let split = if !multi_input && selectors.len() == 1 {
+            // without this route. It is a plan over one bare scan, though, which the remote
+            // transport cannot carry, so over the wire the whole tree is planned as the one
+            // raw-source node instead.
+            let split = if !multi_input && !self_contained && selectors.len() == 1 {
                 FusedSeries::split_aggregate(&tree, &time).context(DataFusionPlanningSnafu)?
             } else {
                 None
             };
             if let Some((partial, final_tree)) = split {
                 let Some(output_schema) = Self::fused_root_schema(&final_tree, &source_tags, &time)
-=======
-            // which are the ones its per-series prefix cannot express. The split is a plan over one
-            // bare scan, though, which the remote transport cannot carry, so over the wire the
-            // whole tree is planned as the one raw-source node instead.
-            if !multi_input
-                && !self_contained
-                && selectors.len() == 1
-                && AggregateFinalize::can_split(&tree, &series_schema.fields, &time)
-            {
-                // With experimental_native_promql enabled, an aggregate value column is named after
-                // the compiled tree's root field (for example, `field_0`), not legacy planner text.
-                // Legacy headers in tests/cases remain unchanged because native PromQL is opt-in/off
-                // by default.
-                let Some(output_fields) = native_root_fields(compiled.tree.root()) else {
-                    return Ok(None);
-                };
-                let Some(output_tags) = native_output_tags(compiled.tree.root(), &source_tags)
->>>>>>> b924bb8b2ba (feat(query): execute native raw promql over real datanodes)
                 else {
                     return Ok(None);
                 };
@@ -3070,15 +3043,10 @@ mod tests {
     use session::context::QueryContextBuilder;
 
     use super::{
-<<<<<<< HEAD
         ArrowDataType, ArrowTimeUnit, METRIC_NAME, NATIVE_PROMQL_EXTENSION_KEY, NativeType,
         collect_selectors, cut_segments, fused_output_schema, hybrid_binary_admitted,
-        independent_scan_pair, native_output_tags, native_promql_requested, scan_time_filter,
-=======
-        METRIC_NAME, NATIVE_PROMQL_EXTENSION_KEY, collect_selectors, cut_segments,
-        hybrid_binary_admitted, independent_scan_pair, native_output_tags, native_promql_requested,
+        independent_scan_pair, native_output_tags, native_promql_requested,
         native_raw_plan_bounds_region_reads, scan_time_filter,
->>>>>>> b924bb8b2ba (feat(query): execute native raw promql over real datanodes)
     };
 
     #[test]
