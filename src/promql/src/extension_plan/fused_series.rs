@@ -1404,7 +1404,10 @@ fn preserves_matching_key(node: &NativeNode, matching: &MatchingLabels) -> bool 
 /// Whether this input reports the metric each of its rows came from, by naming it itself.
 ///
 /// A discovered selector binds one source per metric, so the name comes from the sources rather
-/// than from a single name on the node.
+/// than from a single name on the node. A series frame carries each series' complete label set,
+/// the metric name among them, so a fused node that answers with one names its series itself -
+/// whether that name was bound by a scan or written by a label rewrite inside its tree. That is
+/// what a consumer above a canonical boundary reads: the router hands it frames, not columns.
 fn source_names_its_metric(plan: &LogicalPlan) -> bool {
     match plan {
         LogicalPlan::Extension(extension) => {
@@ -1417,18 +1420,29 @@ fn source_names_its_metric(plan: &LogicalPlan) -> bool {
             }
             // A split's final half reads its producer's state, and the producer is the node that
             // named the metric: it either bound one name or was itself built over sources that do.
-            extension
-                .node
-                .as_any()
-                .downcast_ref::<FusedSeries>()
-                .is_some_and(FusedSeries::publishes_source_metric_name)
+            if let Some(fused) = extension.node.as_any().downcast_ref::<FusedSeries>() {
+                return fused.format == FusedOutputFormat::SeriesFrame
+                    || fused.publishes_source_metric_name();
+            }
+            // Any other boundary the dist planner placed over a frame producer - a merge scan for
+            // one - carries the schema its remote input declared, and an explicit-label frame names
+            // each series itself. A discovered selector's union reaches validation through such a
+            // boundary once every region scan was expanded, so the proof reads the schema it exposes
+            // rather than the plan it hides.
+            frame_names_its_series(plan)
         }
         LogicalPlan::Union(union) => union
             .inputs
             .iter()
             .all(|input| source_names_its_metric(input)),
-        _ => false,
+        other => frame_names_its_series(other),
     }
+}
+
+/// Whether `plan` carries an explicit-label series frame, whose every series names itself.
+fn frame_names_its_series(plan: &LogicalPlan) -> bool {
+    SeriesFrameDeclaration::parse(plan.schema().as_arrow())
+        .is_ok_and(|declaration| declaration.labels() == FrameLabelMode::Explicit)
 }
 
 /// Whether matching operands can be segmented as independent single-source computations and
@@ -1671,16 +1685,22 @@ fn validate_binding(
     binding: &FusedSeriesBinding,
     children: &[LogicalPlan],
 ) -> DataFusionResult<()> {
-    // A `__name__` tag is filled either by one bound metric name or by the sources themselves.
+    let schemas = collect_source_schemas(tree)?;
+    // A `__name__` tag is filled by one bound metric name, by raw sources that name themselves, or
+    // by a frame above them: an evaluated or state frame carries each series' complete label set,
+    // the metric name among them, so a consumer of frames reads the name its producer kept or wrote
+    // rather than one name bound here. A raw input has no name column of its own, which is the case
+    // this proof exists for.
+    let reads_frames = schemas.iter().all(|schema| schema.eval_grid.is_some());
     if binding.tags.iter().any(|tag| tag == METRIC_NAME)
         && binding.metric_name.is_none()
+        && !reads_frames
         && !children.iter().all(source_names_its_metric)
     {
         return Err(DataFusionError::Plan(format!(
             "FusedSeries declares {METRIC_NAME:?} but binds no metric name"
         )));
     }
-    let schemas = collect_source_schemas(tree)?;
     // A tree built without its constructor carries no proof of its contracts, and one without an
     // input has no scan to refuse it later.
     if schemas.is_empty() {
