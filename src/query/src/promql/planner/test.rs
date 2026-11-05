@@ -4026,6 +4026,8 @@ async fn native_fused_aggregate_splits_into_a_final_over_a_partial_producer() {
         "stdvar(some_metric)",
         "sum by (tag_0) (rate(some_metric[5m]))",
         "sum without (tag_0) (some_metric)",
+        "sum without (tag_0) (label_replace(some_metric, \"dst\", \"$1\", \"tag_0\", \"(.*)\"))",
+        "sum by (dst) (label_replace(some_metric, \"dst\", \"$1\", \"tag_0\", \"(.*)\"))",
         "sum(rate(some_metric[5m]))",
         "ceil(sum(some_metric))",
         // A literal scalar on either side of the fold. Below the aggregate it is part of the prefix,
